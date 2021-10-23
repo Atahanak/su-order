@@ -10,6 +10,8 @@
 #include <iomanip>
 #include <queue>
 
+#include "utils/stats.cpp"
+
 using namespace std;
 
 bool sortedge(const pair<int,int> &a,
@@ -351,6 +353,9 @@ int main(int argc, char** argv) {
   int max_deg = 0, min_deg = n, deg;
   int* degs = new int[n];
   memset(degs, 0, sizeof(int) * n);
+  int* ps_degs = new int[n];
+  memset(ps_degs, 0, sizeof(int) * n);
+  get_prefixsum_degrees(xadj, n, ps_degs);
 
   for(int u = 0; u < n; u++) {
     deg = (xadj[u + 1] - xadj[u]);
@@ -372,12 +377,12 @@ int main(int argc, char** argv) {
   cout << "# deg 2: " << degs[2] << endl;
   cout << "# deg 3: " << degs[3] << endl;
   cout << "---------------------------" << endl;
-  cout << "# deg>32: " << degs[32] << endl;
-  cout << "# deg>64: " << degs[64] << endl;
-  cout << "# deg>128: " << degs[128] << endl;
-  cout << "# deg>256: " << degs[256] << endl;
-  cout << "# deg>512: " << degs[512] << endl;
-  cout << "# deg>1024: " << degs[1024] << endl;
+  cout << "# deg>32: " << n-ps_degs[32] << endl;
+  cout << "# deg>64: " << n-ps_degs[64] << endl;
+  cout << "# deg>128: " << n-ps_degs[128] << endl;
+  cout << "# deg>256: " << n-ps_degs[256] << endl;
+  cout << "# deg>512: " << n-ps_degs[512] << endl;
+  cout << "# deg>1024: " << n-ps_degs[1024] << endl;
   cout << "---------------------------" << endl << endl;
 
 
