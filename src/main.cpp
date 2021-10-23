@@ -13,7 +13,7 @@
 using namespace std;
 
 bool sortedge(const pair<int,int> &a,
-              const pair<int,int> &b) {
+    const pair<int,int> &b) {
   if(a.first == b.first) {
     return (a.second < b.second);
   } else {
@@ -29,18 +29,18 @@ bool sortedge(const pair<int,int> &a,
 void testOrder(int *xadj, int* adj, int n, int b, int* order) {
   int* iperm = new int[n];
   for(int i = 0; i < n; i++) iperm[order[i]] = i;
-  
+
   int max_bw = 0;
   double mean_bw = 0;
 
   int bsize = n / b;
-  
+
   int** density = new int*[b];
   for(int i = 0; i < b; i++) {
     density[i] = new int[b];
     memset(density[i], 0, sizeof(int) * b); 
   }
- 
+
   for(int i = 0; i < n; i++) {
     int u = iperm[i];
     int bu = u / bsize;
@@ -50,7 +50,7 @@ void testOrder(int *xadj, int* adj, int n, int b, int* order) {
       int bw = abs(u - v);
       max_bw = max(max_bw, bw);
       mean_bw += bw;
-      
+
       int bv = v / bsize;
       if(bv == b) bv--;
       density[bu][bv]++;      
@@ -59,7 +59,7 @@ void testOrder(int *xadj, int* adj, int n, int b, int* order) {
   mean_bw = (mean_bw + 0.0f) / xadj[n];
 
   cout << "BW stats -- Mean bw: " << mean_bw << " " << "Max bw: " << max_bw << endl;
-  
+
   double para_mean_bw = 0;
   mean_bw = 0;
   int fblocks = 0;
@@ -68,7 +68,7 @@ void testOrder(int *xadj, int* adj, int n, int b, int* order) {
     for(int j = 0; j < b; j++) {
       cout << std::setprecision(2) << density[i][j] / (xadj[n] + .0f) << "\t";
       if(density[i][j] > 0) {
-	fblocks++;
+        fblocks++;
       }
       int bw = abs(i - j);
       mean_bw += bw * density[i][j];
@@ -103,7 +103,7 @@ void lastvertex(int* xadj, int* adj, int nov, int* distance, int source, int &la
   while(noFrontier > 0) {
     noFrontier_prev = noFrontier;
     noFrontier = nextFsize = 0;
-    
+
     if(next == 1) {
 #pragma omp parallel for private(cv, ptr, eptr) reduction(+:nextFsize, noFrontier) schedule(dynamic, TPB)
       for(jv = 0; jv < nov; jv++)  {
@@ -115,14 +115,14 @@ void lastvertex(int* xadj, int* adj, int nov, int* distance, int source, int &la
               noFrontier++;
               nextFsize += xadj[cv+1] - xadj[cv];
               distance[cv] = fdist + 1;
-	      last = cv;
-	      dlast = fdist + 1;
+              last = cv;
+              dlast = fdist + 1;
             }
           }
         }
       }
 #ifdef TM
-    printf("TD - %f\n", omp_get_wtime() - t1);
+      printf("TD - %f\n", omp_get_wtime() - t1);
 #endif
     } else if(next == 2) {
 #pragma omp parallel for private(cv, ptr, eptr) reduction(+:nextFsize, noFrontier) schedule(dynamic, TPB)
@@ -133,8 +133,8 @@ void lastvertex(int* xadj, int* adj, int nov, int* distance, int source, int &la
             cv = adj[ptr];
             if(distance[cv] == fdist) {
               distance[jv] = fdist + 1;
-	      last = jv;
-	      dlast = fdist + 1;
+              last = jv;
+              dlast = fdist + 1;
               noFrontier++;
               nextFsize += xadj[jv+1] - xadj[jv];
               break;
@@ -146,7 +146,7 @@ void lastvertex(int* xadj, int* adj, int nov, int* distance, int source, int &la
     fdist++;
     tEdgesRemain -= nextFsize;
 
-   //-------- transition logic -----------                                                                                                                                                                 
+    //-------- transition logic -----------                                                                                                                                                                 
     if(next == 1) {
       if((nextFsize > (tEdgesRemain / alpha)) && (noFrontier > noFrontier_prev)) {
         next = 2;
@@ -163,7 +163,7 @@ int peripheral(int* xadj, int* adj, int n, int start, int* distance, int* Q) {
   int r = start, r2;
   int rlevel = -1;
   int qlevel = 0;
-      
+
   while(rlevel != qlevel) {
     //cout << "Finding peripheral: current dist = " << qlevel << endl;; 
     rlevel = qlevel;
@@ -172,7 +172,7 @@ int peripheral(int* xadj, int* adj, int n, int start, int* distance, int* Q) {
     lastvertex(xadj, adj, n, distance, r, r2, qlevel);
     r = r2;
 #else
-       
+
     for(int i = 0; i < n; i++) distance[i] = -1;
     int qrp = 0, qwp = 0;
     distance[r] = 0; Q[qwp++] = r;
@@ -180,19 +180,19 @@ int peripheral(int* xadj, int* adj, int n, int start, int* distance, int* Q) {
     while(qrp < qwp) {
       int u = Q[qrp++];
       for(int ptr = xadj[u]; ptr < xadj[u+1]; ptr++) {
-	int v = adj[ptr];
-	if(distance[v] == -1) {
-	  distance[v] = distance[u] + 1;
-	  Q[qwp++] = v;
-	}
+        int v = adj[ptr];
+        if(distance[v] == -1) {
+          distance[v] = distance[u] + 1;
+          Q[qwp++] = v;
+        }
       }
     }
 
     qlevel = 0;
     for(int i = 0; i < qrp; i++) {
       if(qlevel < distance[Q[i]]) {
-	qlevel = distance[Q[i]];
-	r = Q[i];	
+        qlevel = distance[Q[i]];
+        r = Q[i];	
       }
     }
 #endif
@@ -205,33 +205,33 @@ void rcm_sequential(int *xadj, int* adj, int n, int* Q, int* Qp, int* distance) 
   priority_queue<pair<int, int> > PQ;
   int qrp = 0, qwp = 0;
   int reverse = n-1;
-  
+
   for(int i = 0; i < n; i++) {
     if(V[i] == 0) {
       if(xadj[i] == xadj[i+1]) {
-	Q[reverse--] = i;
-	V[i] = 1;
-	continue;
+        Q[reverse--] = i;
+        V[i] = 1;
+        continue;
       }
-      
+
       // cout << i << endl;
       int perv = peripheral(xadj, adj, n, i, distance, Qp);      
       V[perv] = 1; Q[qwp++] = perv;
-      
-      while(qrp < qwp) {
-	int u = Q[qrp++];
-	for(int ptr = xadj[u]; ptr < xadj[u+1]; ptr++) {
-	  int v = adj[ptr];
-	  if(V[v] == 0) {
-	    PQ.push(make_pair(xadj[v + 1] - xadj[v], v));
-	    V[v] = 1;
-	  }
-	}
 
-	while(!PQ.empty()) {
-	  Q[qwp++] = PQ.top().second;;
-	  PQ.pop();
-	}
+      while(qrp < qwp) {
+        int u = Q[qrp++];
+        for(int ptr = xadj[u]; ptr < xadj[u+1]; ptr++) {
+          int v = adj[ptr];
+          if(V[v] == 0) {
+            PQ.push(make_pair(xadj[v + 1] - xadj[v], v));
+            V[v] = 1;
+          }
+        }
+
+        while(!PQ.empty()) {
+          Q[qwp++] = PQ.top().second;;
+          PQ.pop();
+        }
       }
     }
   }
@@ -249,7 +249,7 @@ int main(int argc, char** argv) {
     cout << "Use: exec filename (edge list problem) " << endl;
     return 1;
   }
-  
+
   char binary_name[1024];
   sprintf(binary_name, "%s.met.bin", argv[1]);
 
@@ -274,13 +274,13 @@ int main(int argc, char** argv) {
     if(infile.is_open()) {
       int u, v, edges_read = 0;
       n = 0;
-      
+
       vector< std::pair<int, int> > edges;
       //vertices are 0-based                                                                                                                                                                                                                
       while (infile >> u >> v) {
-	if(u != v) {
+        if(u != v) {
           edges.push_back(std::pair<int, int>(u, v));
-	  edges.push_back(std::pair<int, int>(v, u));
+          edges.push_back(std::pair<int, int>(v, u));
 
           n = max(n, u);
           n = max(n, v);
@@ -384,7 +384,7 @@ int main(int argc, char** argv) {
   int nthreads = omp_get_max_threads();
   cout << "Running with " << nthreads << " threads \n";
 
-  int b = 4;
+  int b = 6;
 
   cout << "---------------------------------------------" << endl;
   cout << "Testing natural order" << endl;
