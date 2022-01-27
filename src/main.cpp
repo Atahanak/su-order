@@ -30,8 +30,8 @@ bool sortedge(const pair<T,T> &a,
 
 //b is blockcount
 void testOrder(unsigned int *xadj, unsigned int* adj, long long n, long long b, long long* order) {
-  long long* iperm = new long long[n];
-  for(long long i = 0; i < n; i++) iperm[order[i]] = i;
+  //long long* iperm = new long long[n];
+  //for(long long i = 0; i < n; i++) iperm[order[i]] = i;
 
   long long max_bw = 0;
   double mean_bw = 0;
@@ -45,11 +45,11 @@ void testOrder(unsigned int *xadj, unsigned int* adj, long long n, long long b, 
   }
 
   for(long long i = 0; i < n; i++) {
-    long long u = iperm[i];
+    long long u = order[i];
     long long bu = u / bsize;
     if(bu == b) bu--;
     for(long long ptr = xadj[i]; ptr < xadj[i+1]; ptr++) {
-      long long v = iperm[adj[ptr]];
+      long long v = order[adj[ptr]];
       long long bw = abs(u - v);
       max_bw = max<long long>(max_bw, bw);
       mean_bw += bw;
@@ -85,7 +85,7 @@ void testOrder(unsigned int *xadj, unsigned int* adj, long long n, long long b, 
 
 
 #define TPB 128
-void lastvertex(unsigned int* xadj, unsigned int* adj, long long nov, long long* distance, long long source, unsigned int &last, unsigned int &dlast) {
+void lastvertex(unsigned int* xadj, unsigned int* adj, long long nov, long long* distance, long long source, long long &last, long long &dlast) {
   long long jv, cv, noFrontier, noFrontier_prev, fdist = 0;
   long long nextFsize, tEdgesRemain, ptr, eptr;
   long long next = 1;
@@ -245,10 +245,16 @@ void rcm_sequential(unsigned int *xadj, unsigned int* adj, long long n, long lon
     Q[i] = Q[n - i - 1];
     Q[n - i - 1] = t;
   }
+  for (long long i = 0; i < n; i++){
+    Qp[i] = Q[i];
+  }
+  for (long long i = 0; i < n; i++){
+    Q[Qp[i]] = i;
+  }
 }
 
 int main(int argc, char** argv) {
-  if(argc != 3) {
+  if(argc < 2) {
     cout << "Use: exec filename num_blocks (edge list problem) " << endl;
     return 1;
   }
