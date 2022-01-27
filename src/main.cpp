@@ -9,6 +9,7 @@
 #include <cfloat>
 #include <iomanip>
 #include <queue>
+#include <set>
 
 #include "utils/stats.cpp"
 
@@ -29,7 +30,7 @@ bool sortedge(const pair<T,T> &a,
 //[ORDERING SYMMETRIC SPARSE MATRICES FOR SMALL PROFILE AND WAVEFRONT]
 
 //b is blockcount
-void testOrder(unsigned int *xadj, unsigned int* adj, long long n, long long b, long long* order) {
+void testOrder(unsigned int *xadj, unsigned int* adj, long long n, long long b, unsigned int* order) {
   //long long* iperm = new long long[n];
   //for(long long i = 0; i < n; i++) iperm[order[i]] = i;
 
@@ -66,7 +67,7 @@ void testOrder(unsigned int *xadj, unsigned int* adj, long long n, long long b, 
   double para_mean_bw = 0;
   mean_bw = 0;
   long long fblocks = 0;
-  cout << "Printing blocks ----------------------------------------------" << endl;
+  cout << "Printing blocks \n----------------------------------------------" << endl;
   for(long long i = 0; i < b; i++) {
     for(long long j = 0; j < b; j++) {
       cout << std::setprecision(2) << density[i][j] / (xadj[n] + .0f) << "\t";
@@ -202,8 +203,71 @@ long long peripheral(unsigned int* xadj, unsigned int* adj, long long n, long lo
   }    
   return r;
 }
+template <typename T, typename L>
+bool confirm_ordering(T* order, L n){
+  set<T> seen;
+  for (int i =0; i < n; i++){
+    if (seen.find(order[i]) != seen.end()){
+      cout << "duplicate order\n";
+      return false;
+    }
+    if (order[i]>=n){
+      cout << "Order too big" << endl;
+      return false;
+    }
+    seen.insert(order[i]);
+  }
+  if (seen.size() != n){
+    cout << "Not every vertex has an order" << endl;
+    return false;
+  }
+  return true;
+}
+template <typename V, typename E, typename O, typename L>
+bool confirm_renumbered_graph(V* xadj, V* renumbered_xadj, E* adj, E* renumbered_adj, O* order, O* inverse_order, L n){
+  for (L i =0; i<n; i++){
+    if (xadj[i+1]-xadj[i] != renumbered_xadj[order[i]+1]-renumbered_xadj[order[i]]){
+      cout << "Mismatch number of edges\n";
+      return false;
+    }
+    for (E edge = 0; edge < xadj[i+1]-xadj[i]; edge++){
+      if (order[adj[xadj[i]+edge]]!=renumbered_adj[renumbered_xadj[order[i]]+edge]){
+        cout << "Bad edge\n";
+        return false;
+      }
+    }
+  }
+  return true;
+}
+template <typename V, typename E, typename C>
+void print_graph(E* xadj, V* adj, C n, string filename){
+  ofstream fout(filename);
+  for (C i = 0; i < n; i++){
+    sort(adj+xadj[i], adj+xadj[i+1]);
+  }
+  for (long long i =0; i<n; i++){
+    for (long long j = xadj[i]; j < xadj[i+1]; j++){
+      if (adj[j] < i) break;
+      fout << i << " " << adj[j] << '\n';
+    }
+  }
+}
+template <typename V, typename E, typename L, typename O>
+void reorder_graph(E* xadj, V* adj, L n, O* order, E*new_xadj, V* new_adj, O* inverse_map){
+  new_xadj[0] = 0;
+  // an inverse map: iperm[i] = original id of vertex with new id i
+  for (L i = 0; i < n; i++) inverse_map[order[i]] = i;
+  for (L i = 0; i < n; i++){
+    V old_name = inverse_map[i];
+    L num_edges = xadj[old_name+1]-xadj[old_name];
+    new_xadj[i+1] = new_xadj[i]+num_edges; 
+    for (L j = 0; j < num_edges; j++){
+      new_adj[new_xadj[i]+j] = order[adj[xadj[old_name]+j]];
+    }
+  }
+}
 
-void rcm_sequential(unsigned int *xadj, unsigned int* adj, long long n, long long* Q, long long* Qp, long long* distance) {
+void rcm_sequential(unsigned int *xadj, unsigned int* adj, long long n, unsigned int* Q, long long* Qp, long long* distance) {
   long long* V = new long long[n]; for(long long i = 0; i < n; i++) V[i] = 0;
   priority_queue<pair<long long, long long> > PQ;
   long long qrp = 0, qwp = 0;
@@ -252,16 +316,72 @@ void rcm_sequential(unsigned int *xadj, unsigned int* adj, long long n, long lon
     Q[Qp[i]] = i;
   }
 }
+vector<string> split(string input, string delimiter){
+  size_t pos = 0;
+  std::string token;
+  vector<string>out;
+  while ((pos = input.find(delimiter)) != std::string::npos) {
+    token = input.substr(0, pos);
+    out.push_back(token);
+    input.erase(0, pos + delimiter.length());
+  }
+  out.push_back(input);
+  return out;
+}
+const string METIS_NAME = "_METIS";
+const string RCM_NAME = "_RCM";
+vector<string> allowed_algorithms = {"rcm", "metis", "random"};
 
+bool reorder_and_print_graph(unsigned int *xadj, unsigned int*adj, long long n, long long m, unsigned int* order, string filename){
+  unsigned int* inverse_order = new unsigned int[n];
+  for (int i =0; i<n; i++) inverse_order[order[i]] = i;
+  unsigned int *new_xadj = new unsigned int[n+1];
+  unsigned int *new_adj = new unsigned int[m];
+  double startt = omp_get_wtime();
+  cout << "Renumbering graph  ... ";
+  reorder_graph(xadj, adj, n, order, new_xadj, new_adj, inverse_order);
+  cout << "took " << omp_get_wtime()-startt << " secs." << endl;
+  startt = omp_get_wtime();
+  cout << "Checking renumbering correctness  ... ";
+  bool confirmed = confirm_renumbered_graph(xadj, new_xadj, adj, new_adj, order, inverse_order, n);
+  cout << "took " << omp_get_wtime()-startt << " secs." << endl;
+  if (!confirmed){
+    cout << "Graph renaming is wrong\n";
+    return false;
+  }
+  if (filename[0]!='-'){
+    //auto graph_path_split = split(argv[1], "/");
+    //auto graph_name_split = split(graph_path_split[graph_path_split.size()-1], ".graph");
+
+    //string rcm_name = graph_name_split[0]+RCM_NAME+".graph";
+    string name = filename;
+    cout << "Printing the renamed graph to " << name << endl;
+    startt = omp_get_wtime();
+    cout << "Printing graph  ... ";
+    print_graph(new_xadj, new_adj, n, name);
+    cout << "took " << omp_get_wtime()-startt << " secs." << endl;
+  }
+  return true;
+
+}
 int main(int argc, char** argv) {
-  if(argc < 2) {
-    cout << "Use: exec filename num_blocks (edge list problem) " << endl;
+  if(argc < 4) {
+    cout << "Use: exec filename algorithm output_filename [block_number] \n";
+    cout << "(if you don't want to print out a reordered graph, pass - as the output_filename)\n ";
+    cout << "Algorithms: random rcm metis\n";
     return 1;
   }
 
   char binary_name[1024];
   sprintf(binary_name, "%s.met.bin", argv[1]);
-
+  string algorithm = argv[2];
+  if (std::find(allowed_algorithms.begin(), allowed_algorithms.end(), algorithm) == allowed_algorithms.end()){
+    cout << "Please use one of the allowed algorithms:\n";
+    for (auto alg : allowed_algorithms) cout << alg << endl;
+    return 1;
+  }
+  
+  // graph doesn't contain multi-edges and selfloops occur only once
   ifstream infile_bin(binary_name, ios::in | ios::binary);
   unsigned int *xadj, m, *adj, *is, n, *tadj;
   if(infile_bin.is_open()) {
@@ -348,7 +468,6 @@ int main(int argc, char** argv) {
       return 1;
     }
   }
-  cout << "here " << endl;
   for(long long i = 0; i < n; i++) {
     for(long long j = xadj[i]; j < xadj[i + 1]; j++) {
       if(i != adj[tadj[j]]) {
@@ -356,7 +475,6 @@ int main(int argc, char** argv) {
       }
     }
   }
-  cout << "there " << endl;
   long long max_deg = 0, min_deg = n, deg;
   long long* degs = new long long[n];
   memset(degs, 0, sizeof(long long) * n);
@@ -397,33 +515,44 @@ int main(int argc, char** argv) {
   cout << "Running with " << nthreads << " threads \n";
 
   long long b = 6;
-  if (argc > 2) b = atoi(argv[2]);
+  if (argc > 4) b = atoi(argv[4]);
 
+  unsigned int* order = new unsigned int[n];
+  for(long long i = 0; i < n; i++) order[i] = i;
+  /*
   cout << "---------------------------------------------" << endl;
   cout << "Testing natural order" << endl;
   cout << "---------------------------------------------" << endl;
-  long long* order = new long long[n];
-  for(long long i = 0; i < n; i++) order[i] = i;
   testOrder(xadj, adj, n, b, order);
-
   cout << endl;
-  cout << "---------------------------------------------" << endl;
-  cout << "Testing random order" << endl;
-  cout << "---------------------------------------------" << endl;
-  std::random_shuffle (order, order + n);
+  */
+  if (algorithm == "random"){ 
+    cout << "---------------------------------------------" << endl;
+    cout << "Random order" << endl;
+    cout << "---------------------------------------------" << endl;
+    std::random_shuffle (order, order + n);
+    confirm_ordering(order, n);
+  }
+  else if (algorithm == "rcm"){
+    cout << endl;
+    cout << "---------------------------------------------" << endl;
+    cout << "Testing RCM order" << endl;
+    cout << "---------------------------------------------" << endl;
+    long long* Qb = new long long[n];  
+    long long* distance = new long long[n];
+    double startt = omp_get_wtime();
+    cout << "Generating RCM ordering ... ";
+    rcm_sequential(xadj, adj, n, order, distance, Qb);
+    double endt = omp_get_wtime();
+    cout << "took " << endt - startt << " secs." << endl;
+    confirm_ordering(order, n);
+  }
   testOrder(xadj, adj, n, b, order);
-
-  cout << endl;
-  cout << "---------------------------------------------" << endl;
-  cout << "Testing RCM order" << endl;
-  cout << "---------------------------------------------" << endl;
-  long long* Qb = new long long[n];  
-  long long* distance = new long long[n];
-  double startt = omp_get_wtime();
-  rcm_sequential(xadj, adj, n, order, distance, Qb);
-  double endt = omp_get_wtime();
-  cout << "It took " << endt - startt << " secs." << endl;
-  testOrder(xadj, adj, n, b, order);
+  bool renumber_correct = reorder_and_print_graph(xadj, adj, n, m, order, argv[3]);
+  if (!renumber_correct) {
+    cout << "Renumbering the graph failed. Did not print\n";
+  }
+  
   return 0;
 }
 
