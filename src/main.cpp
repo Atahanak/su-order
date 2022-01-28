@@ -33,6 +33,61 @@ void create_64bit_graph(unsigned int* xadj, unsigned int* adj, idx_t*& new_xadj,
   for (long long i = 0;i <m; i++) new_adj[i] = adj[i];
 }
 
+struct count_name{
+  unsigned long long count;
+  unsigned int id;
+};
+
+struct count_name_compare{
+  bool operator()(const count_name& lhs, const count_name& rhs){
+    return  lhs.count < lhs.count;
+  }
+};
+
+// Generates an order numbering using the following heuristic:
+// For each part, the number of cut edges of each vertex is placed in an array
+//  That array is made into a heap and elements are popped
+//    For each vertex, if the number of cut edges to the left are bigger than the right, that vertex is added at the left, else its added at the right
+void bad_metis_renumbering(idx_t* part, unsigned int* order, long long n, int num_parts, unsigned int * xadj, unsigned int * adj){
+  // count each part's size
+  vector<long long> part_size(num_parts+1, 0);
+  for (long long i = 0; i<n; i++) part_size[part[i]+1]++;
+  long long max_part_size = 0;
+  for (int i =0; i < num_parts;i++) max_part_size = max<long long>(max_part_size, part_size[i+1]);
+  for (int i =0; i < num_parts;i++) part_size[i+1]+=part_size[i];
+  count_name * boundary_counter = new count_name[max_part_size];
+  long long* boundary_counter_sides = new long long[max_part_size*2];
+  vector<vector<unsigned int>> names(num_parts);
+  for (auto& x : names) x.reserve(max_part_size);
+  for (long long i = 0; i<n; i++) names[part[i]].push_back(i);
+  for (long long p= 0; p<num_parts; p++){
+    memset(boundary_counter, 0, sizeof(count_name)*max_part_size);
+    memset(boundary_counter_sides, 0, sizeof(long long)*max_part_size*2);
+    for (int ui = 0; ui<names[p].size(); ui++){
+      unsigned int u = names[p][ui];
+      boundary_counter[ui].id = ui;
+      for (int vi = xadj[u]; vi < xadj[u+1]; vi++){
+        unsigned int partv = part[adj[vi]];
+        if (partv != p){
+          boundary_counter[ui].count++;
+          if (partv < p) boundary_counter_sides[ui*2]++;
+          else boundary_counter_sides[ui*2+1]++;
+        }
+      } 
+    }
+    make_heap(boundary_counter, boundary_counter+names[p].size(), count_name_compare());
+    long long left = 0;
+    long long right = names[p].size()-1;
+    for (int ji = 0; ji < names[p].size(); ji++){
+      auto boundary = boundary_counter[0];
+      if (boundary_counter_sides[boundary.id*2] > boundary_counter_sides[boundary.id*2+1])
+        order[names[p][boundary.id]] = part_size[p]+(left++);
+      else
+        order[names[p][boundary.id]] = part_size[p]+(right--);
+      pop_heap(boundary_counter, boundary_counter+names[p].size()-ji, count_name_compare());
+    }
+  }
+}
 void naive_metis_renumbering(idx_t* part, unsigned int* order, long long n, int num_parts){
   vector<long long> part_size(num_parts+1, 0);
   for (long long i = 0; i<n; i++) part_size[part[i]+1]++;
@@ -71,7 +126,8 @@ bool metis_partitioning(unsigned int* xadj, unsigned int* adj, long long n, long
   cout << "took " << omp_get_wtime()-startt << " secs." << endl;
   startt = omp_get_wtime();
   cout << "filling order array  ... ";
-  naive_metis_renumbering(part, order, n, num_parts);
+  //naive_metis_renumbering(part, order, n, num_parts);
+  bad_metis_renumbering(part, order, n, num_parts, xadj, adj);
   cout << "took " << omp_get_wtime()-startt << " secs." << endl;
   return true;
 }
@@ -256,10 +312,11 @@ long long peripheral(unsigned int* xadj, unsigned int* adj, long long n, long lo
 template <typename T, typename L>
 bool confirm_ordering(T* order, L n){
   set<T> seen;
+  int duplicates = 0;
   for (int i =0; i < n; i++){
     if (seen.find(order[i]) != seen.end()){
-      cout << "duplicate order\n";
-      return false;
+      cout << "duplicate order " << i << " " << order[i] << "\n";
+      duplicates++;
     }
     if (order[i]>=n){
       cout << "Order too big" << endl;
@@ -269,6 +326,10 @@ bool confirm_ordering(T* order, L n){
   }
   if (seen.size() != n){
     cout << "Not every vertex has an order" << endl;
+    return false;
+  }
+  if (duplicates>0){
+    cout << "duplicates " << duplicates << endl;
     return false;
   }
   return true;
@@ -599,6 +660,10 @@ int main(int argc, char** argv) {
     confirm_ordering(order, n);
   } else if (algorithm == "metis-naive"){
     bool worked = metis_partitioning(xadj, adj, n, m, b, order);
+    if (!confirm_ordering(order, n)){
+      cout << "Failed\n";
+      return 1;
+    }
   } else if (algorithm == "no-order"){}
   testOrder(xadj, adj, n, b, order);
   bool renumber_correct = reorder_and_print_graph(xadj, adj, n, m, order, argv[3]);
