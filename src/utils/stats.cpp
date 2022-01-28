@@ -1,8 +1,8 @@
 #ifndef _STATS
 #define _STATS
 
-template<typename vid_t>
-void get_prefixsum_degrees(vid_t * xadj, vid_t n, vid_t * prefix_sum){
+template<typename vid_t, typename C, typename T>
+void get_prefixsum_degrees(vid_t * xadj, C n, T * prefix_sum){
   memset(prefix_sum, 0, sizeof(vid_t) * n);
   for(vid_t i = 0; i < n; i++){
     prefix_sum[xadj[i+1] - xadj[i]]++;

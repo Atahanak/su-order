@@ -8,16 +8,18 @@ TEST_TARGET=./bin/${BRANCH}_test.out
 
 MKDIR_C=mkdir -p
 DIRS=bin
+METIS_INCLUDE=lib/include/
+METIS_LIB=lib/lib/
 
 GCC=g++
-GCC_FLAGS= -std=c++14 -fopenmp -O3
-GCC_DEBUG_FLAGS= -std=c++14 -fopenmp -g
+GCC_FLAGS= -std=c++14 -fopenmp -O3 -I${METIS_INCLUDE} -L${METIS_LIB} -lmetis
+GCC_DEBUG_FLAGS= -std=c++14 -fopenmp -g 
 
 all : $(TARGET)
 test: $(TEST_TARGET)
 
 $(TARGET): dir
-	$(GCC) $(GCC_FLAGS) -o $@ $(MAIN_SOURCE)
+	$(GCC) -o $@ $(MAIN_SOURCE) $(GCC_FLAGS) 
 $(TEST_TARGET): dir
 	$(GCC) $(GCC_DEBUG_FLAGS) -o $@ $(TEST_SOURCE)
 

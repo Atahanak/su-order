@@ -9,13 +9,16 @@
 #include <cfloat>
 #include <iomanip>
 #include <queue>
+#include <set>
+#include <metis.h>
 
 #include "utils/stats.cpp"
 
 using namespace std;
 
-bool sortedge(const pair<int,int> &a,
-    const pair<int,int> &b) {
+template <typename T>
+bool sortedge(const pair<T,T> &a,
+    const pair<T,T> &b) {
   if(a.first == b.first) {
     return (a.second < b.second);
   } else {
@@ -23,37 +26,86 @@ bool sortedge(const pair<int,int> &a,
   }
 }
 
+void create_64bit_graph(unsigned int* xadj, unsigned int* adj, idx_t*& new_xadj, idx_t*& new_adj, long long n, long long m){
+  new_xadj = new idx_t[n+1];
+  new_adj = new idx_t[m];
+  for (long long i = 0;i <n+1; i++) new_xadj[i] = xadj[i];
+  for (long long i = 0;i <m; i++) new_adj[i] = adj[i];
+}
+
+void naive_metis_renumbering(idx_t* part, unsigned int* order, long long n, int num_parts){
+  vector<long long> part_size(num_parts+1, 0);
+  for (long long i = 0; i<n; i++) part_size[part[i]+1]++;
+  for (int i =0; i < num_parts;i++) part_size[i+1]+=part_size[i];
+  for (long long i =0; i<n; i++){
+    order[i] = part_size[part[i]]++;
+  }
+}
+
+void boundary_reduction_metis_renumbering(idx_t* part, unsigned int* order, long long n, int num_parts){
+  // for each part pair, rank vertices by their boundary edges
+  // Number vertices
+  vector<long long> part_size(num_parts+1, 0);
+  for (long long i = 0; i<n; i++) part_size[part[i]+1]++;
+  for (int i =0; i < num_parts;i++) part_size[i+1]+=part_size[i];
+  for (long long i =0; i<n; i++){
+    order[i] = part_size[part[i]]++;
+  }
+}
+
+bool metis_partitioning(unsigned int* xadj, unsigned int* adj, long long n, long long m, int num_parts, unsigned int * order){
+  idx_t* metis_xadj, *metis_adj;
+  idx_t *nvtx = new idx_t(n);
+  idx_t *ncon = new idx_t(1); // number of balancing constraints
+  idx_t *nparts = new idx_t(num_parts);
+  idx_t *objval = new idx_t;
+  idx_t *part = new idx_t[*nvtx];
+  idx_t options[METIS_NOPTIONS];
+  double startt = omp_get_wtime();
+  cout << "Creating 64 bit grap  ... ";
+  create_64bit_graph(xadj, adj, metis_xadj, metis_adj, n, m); 
+  cout << "took " << omp_get_wtime()-startt << " secs." << endl;
+  startt = omp_get_wtime();
+  cout << "METIS partitioning  ... ";
+  METIS_PartGraphRecursive(nvtx, ncon, metis_xadj, metis_adj, NULL, NULL, NULL, nparts, NULL, NULL, NULL, objval, part);
+  cout << "took " << omp_get_wtime()-startt << " secs." << endl;
+  startt = omp_get_wtime();
+  cout << "filling order array  ... ";
+  naive_metis_renumbering(part, order, n, num_parts);
+  cout << "took " << omp_get_wtime()-startt << " secs." << endl;
+  return true;
+}
 
 //[Two improved algorithms for envelope and wavefront reduction]
 //[ORDERING SYMMETRIC SPARSE MATRICES FOR SMALL PROFILE AND WAVEFRONT]
 
 //b is blockcount
-void testOrder(int *xadj, int* adj, int n, int b, int* order) {
-  int* iperm = new int[n];
-  for(int i = 0; i < n; i++) iperm[order[i]] = i;
+void testOrder(unsigned int *xadj, unsigned int* adj, long long n, long long b, unsigned int* order) {
+  //long long* iperm = new long long[n];
+  //for(long long i = 0; i < n; i++) iperm[order[i]] = i;
 
-  int max_bw = 0;
+  long long max_bw = 0;
   double mean_bw = 0;
 
-  int bsize = n / b;
+  long long bsize = n / b;
 
-  int** density = new int*[b];
-  for(int i = 0; i < b; i++) {
-    density[i] = new int[b];
-    memset(density[i], 0, sizeof(int) * b); 
+  long long** density = new long long*[b];
+  for(long long i = 0; i < b; i++) {
+    density[i] = new long long[b];
+    memset(density[i], 0, sizeof(long long) * b); 
   }
 
-  for(int i = 0; i < n; i++) {
-    int u = iperm[i];
-    int bu = u / bsize;
+  for(long long i = 0; i < n; i++) {
+    long long u = order[i];
+    long long bu = u / bsize;
     if(bu == b) bu--;
-    for(int ptr = xadj[i]; ptr < xadj[i+1]; ptr++) {
-      int v = iperm[adj[ptr]];
-      int bw = abs(u - v);
-      max_bw = max(max_bw, bw);
+    for(long long ptr = xadj[i]; ptr < xadj[i+1]; ptr++) {
+      long long v = order[adj[ptr]];
+      long long bw = abs(u - v);
+      max_bw = max<long long>(max_bw, bw);
       mean_bw += bw;
 
-      int bv = v / bsize;
+      long long bv = v / bsize;
       if(bv == b) bv--;
       density[bu][bv]++;      
     }
@@ -64,15 +116,15 @@ void testOrder(int *xadj, int* adj, int n, int b, int* order) {
 
   double para_mean_bw = 0;
   mean_bw = 0;
-  int fblocks = 0;
-  cout << "Printing blocks ----------------------------------------------" << endl;
-  for(int i = 0; i < b; i++) {
-    for(int j = 0; j < b; j++) {
+  long long fblocks = 0;
+  cout << "Printing blocks \n----------------------------------------------" << endl;
+  for(long long i = 0; i < b; i++) {
+    for(long long j = 0; j < b; j++) {
       cout << std::setprecision(2) << density[i][j] / (xadj[n] + .0f) << "\t";
       if(density[i][j] > 0) {
         fblocks++;
       }
-      int bw = abs(i - j);
+      long long bw = abs(i - j);
       mean_bw += bw * density[i][j];
     }
     cout << endl;
@@ -84,10 +136,10 @@ void testOrder(int *xadj, int* adj, int n, int b, int* order) {
 
 
 #define TPB 128
-void lastvertex(int* xadj, int* adj, int nov, int* distance, int source, int &last, int &dlast) {
-  int jv, cv, noFrontier, noFrontier_prev, fdist = 0;
-  int nextFsize, tEdgesRemain, ptr, eptr;
-  int next = 1;
+void lastvertex(unsigned int* xadj, unsigned int* adj, long long nov, long long* distance, long long source, long long &last, long long &dlast) {
+  long long jv, cv, noFrontier, noFrontier_prev, fdist = 0;
+  long long nextFsize, tEdgesRemain, ptr, eptr;
+  long long next = 1;
   double alpha = 4, beta = 4;
   last = dlast = -1;
   next = 1;
@@ -161,10 +213,10 @@ void lastvertex(int* xadj, int* adj, int nov, int* distance, int source, int &la
   }
 }
 
-int peripheral(int* xadj, int* adj, int n, int start, int* distance, int* Q) {
-  int r = start, r2;
-  int rlevel = -1;
-  int qlevel = 0;
+long long peripheral(unsigned int* xadj, unsigned int* adj, long long n, long long start, long long* distance, long long* Q) {
+  long long r = start, r2;
+  long long rlevel = -1;
+  long long qlevel = 0;
 
   while(rlevel != qlevel) {
     //cout << "Finding peripheral: current dist = " << qlevel << endl;; 
@@ -175,14 +227,14 @@ int peripheral(int* xadj, int* adj, int n, int start, int* distance, int* Q) {
     r = r2;
 #else
 
-    for(int i = 0; i < n; i++) distance[i] = -1;
-    int qrp = 0, qwp = 0;
+    for(long long i = 0; i < n; i++) distance[i] = -1;
+    long long qrp = 0, qwp = 0;
     distance[r] = 0; Q[qwp++] = r;
 
     while(qrp < qwp) {
-      int u = Q[qrp++];
-      for(int ptr = xadj[u]; ptr < xadj[u+1]; ptr++) {
-        int v = adj[ptr];
+      long long u = Q[qrp++];
+      for(long long ptr = xadj[u]; ptr < xadj[u+1]; ptr++) {
+        long long v = adj[ptr];
         if(distance[v] == -1) {
           distance[v] = distance[u] + 1;
           Q[qwp++] = v;
@@ -191,7 +243,7 @@ int peripheral(int* xadj, int* adj, int n, int start, int* distance, int* Q) {
     }
 
     qlevel = 0;
-    for(int i = 0; i < qrp; i++) {
+    for(long long i = 0; i < qrp; i++) {
       if(qlevel < distance[Q[i]]) {
         qlevel = distance[Q[i]];
         r = Q[i];	
@@ -201,14 +253,77 @@ int peripheral(int* xadj, int* adj, int n, int start, int* distance, int* Q) {
   }    
   return r;
 }
+template <typename T, typename L>
+bool confirm_ordering(T* order, L n){
+  set<T> seen;
+  for (int i =0; i < n; i++){
+    if (seen.find(order[i]) != seen.end()){
+      cout << "duplicate order\n";
+      return false;
+    }
+    if (order[i]>=n){
+      cout << "Order too big" << endl;
+      return false;
+    }
+    seen.insert(order[i]);
+  }
+  if (seen.size() != n){
+    cout << "Not every vertex has an order" << endl;
+    return false;
+  }
+  return true;
+}
+template <typename V, typename E, typename O, typename L>
+bool confirm_renumbered_graph(V* xadj, V* renumbered_xadj, E* adj, E* renumbered_adj, O* order, O* inverse_order, L n){
+  for (L i =0; i<n; i++){
+    if (xadj[i+1]-xadj[i] != renumbered_xadj[order[i]+1]-renumbered_xadj[order[i]]){
+      cout << "Mismatch number of edges\n";
+      return false;
+    }
+    for (E edge = 0; edge < xadj[i+1]-xadj[i]; edge++){
+      if (order[adj[xadj[i]+edge]]!=renumbered_adj[renumbered_xadj[order[i]]+edge]){
+        cout << "Bad edge\n";
+        return false;
+      }
+    }
+  }
+  return true;
+}
+template <typename V, typename E, typename C>
+void print_graph(E* xadj, V* adj, C n, string filename){
+  ofstream fout(filename);
+  for (C i = 0; i < n; i++){
+    sort(adj+xadj[i], adj+xadj[i+1]);
+  }
+  for (long long i =0; i<n; i++){
+    for (long long j = xadj[i]; j < xadj[i+1]; j++){
+      if (adj[j] < i) continue;
+      fout << i << " " << adj[j] << '\n';
+    }
+  }
+}
+template <typename V, typename E, typename L, typename O>
+void reorder_graph(E* xadj, V* adj, L n, O* order, E*new_xadj, V* new_adj, O* inverse_map){
+  new_xadj[0] = 0;
+  // an inverse map: iperm[i] = original id of vertex with new id i
+  for (L i = 0; i < n; i++) inverse_map[order[i]] = i;
+  for (L i = 0; i < n; i++){
+    V old_name = inverse_map[i];
+    L num_edges = xadj[old_name+1]-xadj[old_name];
+    new_xadj[i+1] = new_xadj[i]+num_edges; 
+    for (L j = 0; j < num_edges; j++){
+      new_adj[new_xadj[i]+j] = order[adj[xadj[old_name]+j]];
+    }
+  }
+}
 
-void rcm_sequential(int *xadj, int* adj, int n, int* Q, int* Qp, int* distance) {
-  int* V = new int[n]; for(int i = 0; i < n; i++) V[i] = 0;
-  priority_queue<pair<int, int> > PQ;
-  int qrp = 0, qwp = 0;
-  int reverse = n-1;
+void rcm_sequential(unsigned int *xadj, unsigned int* adj, long long n, unsigned int* Q, long long* Qp, long long* distance) {
+  long long* V = new long long[n]; for(long long i = 0; i < n; i++) V[i] = 0;
+  priority_queue<pair<long long, long long> > PQ;
+  long long qrp = 0, qwp = 0;
+  long long reverse = n-1;
 
-  for(int i = 0; i < n; i++) {
+  for(long long i = 0; i < n; i++) {
     if(V[i] == 0) {
       if(xadj[i] == xadj[i+1]) {
         Q[reverse--] = i;
@@ -217,13 +332,13 @@ void rcm_sequential(int *xadj, int* adj, int n, int* Q, int* Qp, int* distance) 
       }
 
       // cout << i << endl;
-      int perv = peripheral(xadj, adj, n, i, distance, Qp);      
+      long long perv = peripheral(xadj, adj, n, i, distance, Qp);      
       V[perv] = 1; Q[qwp++] = perv;
 
       while(qrp < qwp) {
-        int u = Q[qrp++];
-        for(int ptr = xadj[u]; ptr < xadj[u+1]; ptr++) {
-          int v = adj[ptr];
+        long long u = Q[qrp++];
+        for(long long ptr = xadj[u]; ptr < xadj[u+1]; ptr++) {
+          long long v = adj[ptr];
           if(V[v] == 0) {
             PQ.push(make_pair(xadj[v + 1] - xadj[v], v));
             V[v] = 1;
@@ -239,53 +354,116 @@ void rcm_sequential(int *xadj, int* adj, int n, int* Q, int* Qp, int* distance) 
   }
 
   //Reverse
-  for(int i = 0; i < n/2; i++) {
-    int t = Q[i];
+  for(long long i = 0; i < n/2; i++) {
+    long long t = Q[i];
     Q[i] = Q[n - i - 1];
     Q[n - i - 1] = t;
   }
+  for (long long i = 0; i < n; i++){
+    Qp[i] = Q[i];
+  }
+  for (long long i = 0; i < n; i++){
+    Q[Qp[i]] = i;
+  }
 }
+vector<string> split(string input, string delimiter){
+  size_t pos = 0;
+  std::string token;
+  vector<string>out;
+  while ((pos = input.find(delimiter)) != std::string::npos) {
+    token = input.substr(0, pos);
+    out.push_back(token);
+    input.erase(0, pos + delimiter.length());
+  }
+  out.push_back(input);
+  return out;
+}
+const string METIS_NAME = "_METIS";
+const string RCM_NAME = "_RCM";
+vector<string> allowed_algorithms = {"rcm", "metis-naive", "random", "no-order"};
 
+bool reorder_and_print_graph(unsigned int *xadj, unsigned int*adj, long long n, long long m, unsigned int* order, string filename){
+  unsigned int* inverse_order = new unsigned int[n];
+  for (int i =0; i<n; i++) inverse_order[order[i]] = i;
+  unsigned int *new_xadj = new unsigned int[n+1];
+  unsigned int *new_adj = new unsigned int[m];
+  double startt = omp_get_wtime();
+  cout << "Renumbering graph  ... ";
+  reorder_graph(xadj, adj, n, order, new_xadj, new_adj, inverse_order);
+  cout << "took " << omp_get_wtime()-startt << " secs." << endl;
+  startt = omp_get_wtime();
+  cout << "Checking renumbering correctness  ... ";
+  bool confirmed = confirm_renumbered_graph(xadj, new_xadj, adj, new_adj, order, inverse_order, n);
+  cout << "took " << omp_get_wtime()-startt << " secs." << endl;
+  if (!confirmed){
+    cout << "Graph renaming is wrong\n";
+    return false;
+  }
+  if (filename[0]!='-'){
+    //auto graph_path_split = split(argv[1], "/");
+    //auto graph_name_split = split(graph_path_split[graph_path_split.size()-1], ".graph");
+
+    //string rcm_name = graph_name_split[0]+RCM_NAME+".graph";
+    string name = filename;
+    cout << "Printing the renamed graph to " << name << endl;
+    startt = omp_get_wtime();
+    cout << "Printing graph  ... ";
+    print_graph(new_xadj, new_adj, n, name);
+    cout << "took " << omp_get_wtime()-startt << " secs." << endl;
+  }
+  return true;
+
+}
 int main(int argc, char** argv) {
-  if(argc != 2) {
-    cout << "Use: exec filename (edge list problem) " << endl;
+  if(argc < 4) {
+    cout << "Use: exec filename algorithm output_filename [block_number] \n";
+    cout << "(if you don't want to print out a reordered graph, pass - as the output_filename)\n ";
+    cout << "Algorithms: random rcm metis-naive\n";
     return 1;
   }
 
   char binary_name[1024];
   sprintf(binary_name, "%s.met.bin", argv[1]);
-
+  string algorithm = argv[2];
+  cout << "Using algorithm: " << algorithm << endl;
+  if (std::find(allowed_algorithms.begin(), allowed_algorithms.end(), algorithm) == allowed_algorithms.end()){
+    cout << "Please use one of the allowed algorithms:\n";
+    for (auto alg : allowed_algorithms) cout << alg << endl;
+    return 1;
+  }
+  
+  // graph doesn't contain multi-edges and selfloops occur only once
   ifstream infile_bin(binary_name, ios::in | ios::binary);
-  int *xadj, m, *adj, *is, n, *tadj;
+  unsigned int *xadj, m, *adj, *is, n, *tadj;
   if(infile_bin.is_open()) {
-    infile_bin.read((char*)(&n), sizeof(int));
-    infile_bin.read((char*)(&m), sizeof(int));
-    xadj = new int[n + 1];
-    infile_bin.read((char*)xadj, sizeof(int) * (n + 1));
+    infile_bin.read((char*)(&n), sizeof(unsigned int));
+    infile_bin.read((char*)(&m), sizeof(unsigned int));
+    xadj = new unsigned int[n + 1];
+    infile_bin.read((char*)xadj, sizeof(unsigned int) * (n + 1));
 
-    adj = new int[m];
-    infile_bin.read((char*)adj, sizeof(int) * m);
+    adj = new unsigned int[m];
+    infile_bin.read((char*)adj, sizeof(unsigned int) * m);
 
-    tadj = new int[m];
-    infile_bin.read((char*)tadj, sizeof(int) * m);
+    tadj = new unsigned int[m];
+    infile_bin.read((char*)tadj, sizeof(unsigned int) * m);
 
-    is = new int[m];
-    infile_bin.read((char*)is, sizeof(int) * m);
+    is = new unsigned int[m];
+    infile_bin.read((char*)is, sizeof(unsigned int) * m);
   } else {
     ifstream infile(argv[1]);
     if(infile.is_open()) {
-      int u, v, edges_read = 0;
+      long long u, v, edges_read = 0;
       n = 0;
 
-      vector< std::pair<int, int> > edges;
+      vector< std::pair<long long, long long> > edges;
       //vertices are 0-based                                                                                                                                                                                                                
       while (infile >> u >> v) {
         if(u != v) {
-          edges.push_back(std::pair<int, int>(u, v));
-          edges.push_back(std::pair<int, int>(v, u));
+          edges.push_back(std::pair<long long, long long>(u, v));
+          edges.push_back(std::pair<long long, long long>(v, u));
 
-          n = max(n, u);
-          n = max(n, v);
+          n = max<long long>(n, u);
+          n = max<long long>(n, v);
 
           edges_read++;
         }
@@ -294,70 +472,68 @@ int main(int argc, char** argv) {
       cout << "No vertices is " << n << endl;
       cout << "No read edges " << edges_read << endl;
 
-      sort(edges.begin(), edges.end(), sortedge);
+      sort(edges.begin(), edges.end(), sortedge<long long>);
       edges.erase( unique( edges.begin(), edges.end() ), edges.end() );
 
       //allocate the memory                                                                                                                                                                                                                 
-      xadj = new int[n + 1];
+      xadj = new unsigned int[n + 1];
 
       m = edges.size();
-      adj = new int[m];
-      tadj = new int[m];
-      is = new int[m];
+      adj = new unsigned int[m];
+      tadj = new unsigned int[m];
+      is = new unsigned int[m];
       cout << "No edges is " << m << endl;
 
       //populate adj and xadj
-      memset(xadj, 0, sizeof(int) * (n + 1));
-      int mt = 0;
-      for(std::pair<int, int>& e : edges) {
+      memset(xadj, 0, sizeof(unsigned int) * (n + 1));
+      long long mt = 0;
+      for(std::pair<long long, long long>& e : edges) {
         xadj[e.first + 1]++;
         is[mt] = e.first;
         adj[mt++] = e.second;
       }
 
-      for(int i = 1; i <= n; i++) {
+      for(long long i = 1; i <= n; i++) {
         xadj[i] += xadj[i-1];
       }
 
-      for(int i = 0; i < m; i++) {
+      for(long long i = 0; i < m; i++) {
         tadj[i] = xadj[adj[i]]++;
       }
-      for(int i = n; i > 0; i--) {
+      for(long long i = n; i > 0; i--) {
         xadj[i] = xadj[i-1];
       }
       xadj[0] = 0;
 
       ofstream outfile_bin(binary_name, ios::out | ios::binary);
       if(outfile_bin.is_open()) {
-        outfile_bin.write((char*)(&n), sizeof(int));
-        outfile_bin.write((char*)(&m), sizeof(int));
-        outfile_bin.write((char*)xadj, sizeof(int) * (n + 1));
-        outfile_bin.write((char*)adj, sizeof(int) * m);
-        outfile_bin.write((char*)tadj, sizeof(int) * m);
-        outfile_bin.write((char*)is, sizeof(int) * m);
+        outfile_bin.write((char*)(&n), sizeof(unsigned int));
+        outfile_bin.write((char*)(&m), sizeof(unsigned int));
+        outfile_bin.write((char*)xadj, sizeof(unsigned int) * (n + 1));
+        outfile_bin.write((char*)adj, sizeof(unsigned int) * m);
+        outfile_bin.write((char*)tadj, sizeof(unsigned int) * m);
+        outfile_bin.write((char*)is, sizeof(unsigned int) * m);
       }
     } else {
       cout << "The file does not exist " << endl;
       return 1;
     }
   }
-  cout << "here " << endl;
-  for(int i = 0; i < n; i++) {
-    for(int j = xadj[i]; j < xadj[i + 1]; j++) {
+  for(long long i = 0; i < n; i++) {
+    for(long long j = xadj[i]; j < xadj[i + 1]; j++) {
       if(i != adj[tadj[j]]) {
         cout << "problem: " << i << " " << j << " " << adj[j] << " " << tadj[j] <<  endl;
       }
     }
   }
-  cout << "there " << endl;
-  int max_deg = 0, min_deg = n, deg;
-  int* degs = new int[n];
-  memset(degs, 0, sizeof(int) * n);
-  int* ps_degs = new int[n];
-  memset(ps_degs, 0, sizeof(int) * n);
+  long long max_deg = 0, min_deg = n, deg;
+  long long* degs = new long long[n];
+  memset(degs, 0, sizeof(long long) * n);
+  long long* ps_degs = new long long[n];
+  memset(ps_degs, 0, sizeof(long long) * n);
   get_prefixsum_degrees(xadj, n, ps_degs);
 
-  for(int u = 0; u < n; u++) {
+  for(long long u = 0; u < n; u++) {
     deg = (xadj[u + 1] - xadj[u]);
     degs[deg]++;
     if(deg < min_deg) {min_deg = deg;}
@@ -386,36 +562,50 @@ int main(int argc, char** argv) {
   cout << "---------------------------" << endl << endl;
 
 
-  int nthreads = omp_get_max_threads();
+  long long nthreads = omp_get_max_threads();
   cout << "Running with " << nthreads << " threads \n";
 
-  int b = 6;
+  long long b = 6;
+  if (argc > 4) b = atoi(argv[4]);
 
+  unsigned int* order = new unsigned int[n];
+  for(long long i = 0; i < n; i++) order[i] = i;
+  /*
   cout << "---------------------------------------------" << endl;
   cout << "Testing natural order" << endl;
   cout << "---------------------------------------------" << endl;
-  int* order = new int[n];
-  for(int i = 0; i < n; i++) order[i] = i;
   testOrder(xadj, adj, n, b, order);
-
   cout << endl;
-  cout << "---------------------------------------------" << endl;
-  cout << "Testing random order" << endl;
-  cout << "---------------------------------------------" << endl;
-  std::random_shuffle (order, order + n);
+  */
+  if (algorithm == "random"){ 
+    cout << "---------------------------------------------" << endl;
+    cout << "Random order" << endl;
+    cout << "---------------------------------------------" << endl;
+    std::random_shuffle (order, order + n);
+    confirm_ordering(order, n);
+  }
+  else if (algorithm == "rcm"){
+    cout << endl;
+    cout << "---------------------------------------------" << endl;
+    cout << "Testing RCM order" << endl;
+    cout << "---------------------------------------------" << endl;
+    long long* Qb = new long long[n];  
+    long long* distance = new long long[n];
+    double startt = omp_get_wtime();
+    cout << "Generating RCM ordering ... ";
+    rcm_sequential(xadj, adj, n, order, distance, Qb);
+    double endt = omp_get_wtime();
+    cout << "took " << endt - startt << " secs." << endl;
+    confirm_ordering(order, n);
+  } else if (algorithm == "metis-naive"){
+    bool worked = metis_partitioning(xadj, adj, n, m, b, order);
+  } else if (algorithm == "no-order"){}
   testOrder(xadj, adj, n, b, order);
-
-  cout << endl;
-  cout << "---------------------------------------------" << endl;
-  cout << "Testing RCM order" << endl;
-  cout << "---------------------------------------------" << endl;
-  int* Qb = new int[n];  
-  int* distance = new int[n];
-  double startt = omp_get_wtime();
-  rcm_sequential(xadj, adj, n, order, distance, Qb);
-  double endt = omp_get_wtime();
-  cout << "It took " << endt - startt << " secs." << endl;
-  testOrder(xadj, adj, n, b, order);
+  bool renumber_correct = reorder_and_print_graph(xadj, adj, n, m, order, argv[3]);
+  if (!renumber_correct) {
+    cout << "Renumbering the graph failed. Did not print\n";
+  }
+  
   return 0;
 }
 
