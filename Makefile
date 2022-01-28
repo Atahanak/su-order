@@ -8,8 +8,8 @@ TEST_TARGET=./bin/${BRANCH}_test.out
 
 MKDIR_C=mkdir -p
 DIRS=bin
-METIS_INCLUDE=metis-5.1.0/include/
-METIS_LIB=metis-5.1.0/build/Linux-x86_64/libmetis/
+METIS_INCLUDE=lib/include/
+METIS_LIB=lib/lib/
 
 GCC=g++
 GCC_FLAGS= -std=c++14 -fopenmp -O3 -I${METIS_INCLUDE} -L${METIS_LIB} -lmetis
@@ -19,7 +19,7 @@ all : $(TARGET)
 test: $(TEST_TARGET)
 
 $(TARGET): dir
-	$(GCC) $(GCC_FLAGS) -o $@ $(MAIN_SOURCE)
+	$(GCC) -o $@ $(MAIN_SOURCE) $(GCC_FLAGS) 
 $(TEST_TARGET): dir
 	$(GCC) $(GCC_DEBUG_FLAGS) -o $@ $(TEST_SOURCE)
 

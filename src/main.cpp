@@ -10,6 +10,7 @@
 #include <iomanip>
 #include <queue>
 #include <set>
+#include <metis.h>
 
 #include "utils/stats.cpp"
 
@@ -25,6 +26,55 @@ bool sortedge(const pair<T,T> &a,
   }
 }
 
+void create_64bit_graph(unsigned int* xadj, unsigned int* adj, idx_t*& new_xadj, idx_t*& new_adj, long long n, long long m){
+  new_xadj = new idx_t[n+1];
+  new_adj = new idx_t[m];
+  for (long long i = 0;i <n+1; i++) new_xadj[i] = xadj[i];
+  for (long long i = 0;i <m; i++) new_adj[i] = adj[i];
+}
+
+void naive_metis_renumbering(idx_t* part, unsigned int* order, long long n, int num_parts){
+  vector<long long> part_size(num_parts+1, 0);
+  for (long long i = 0; i<n; i++) part_size[part[i]+1]++;
+  for (int i =0; i < num_parts;i++) part_size[i+1]+=part_size[i];
+  for (long long i =0; i<n; i++){
+    order[i] = part_size[part[i]]++;
+  }
+}
+
+void boundary_reduction_metis_renumbering(idx_t* part, unsigned int* order, long long n, int num_parts){
+  // for each part pair, rank vertices by their boundary edges
+  // Number vertices
+  vector<long long> part_size(num_parts+1, 0);
+  for (long long i = 0; i<n; i++) part_size[part[i]+1]++;
+  for (int i =0; i < num_parts;i++) part_size[i+1]+=part_size[i];
+  for (long long i =0; i<n; i++){
+    order[i] = part_size[part[i]]++;
+  }
+}
+
+bool metis_partitioning(unsigned int* xadj, unsigned int* adj, long long n, long long m, int num_parts, unsigned int * order){
+  idx_t* metis_xadj, *metis_adj;
+  idx_t *nvtx = new idx_t(n);
+  idx_t *ncon = new idx_t(1); // number of balancing constraints
+  idx_t *nparts = new idx_t(num_parts);
+  idx_t *objval = new idx_t;
+  idx_t *part = new idx_t[*nvtx];
+  idx_t options[METIS_NOPTIONS];
+  double startt = omp_get_wtime();
+  cout << "Creating 64 bit grap  ... ";
+  create_64bit_graph(xadj, adj, metis_xadj, metis_adj, n, m); 
+  cout << "took " << omp_get_wtime()-startt << " secs." << endl;
+  startt = omp_get_wtime();
+  cout << "METIS partitioning  ... ";
+  METIS_PartGraphRecursive(nvtx, ncon, metis_xadj, metis_adj, NULL, NULL, NULL, nparts, NULL, NULL, NULL, objval, part);
+  cout << "took " << omp_get_wtime()-startt << " secs." << endl;
+  startt = omp_get_wtime();
+  cout << "filling order array  ... ";
+  naive_metis_renumbering(part, order, n, num_parts);
+  cout << "took " << omp_get_wtime()-startt << " secs." << endl;
+  return true;
+}
 
 //[Two improved algorithms for envelope and wavefront reduction]
 //[ORDERING SYMMETRIC SPARSE MATRICES FOR SMALL PROFILE AND WAVEFRONT]
@@ -247,7 +297,7 @@ void print_graph(E* xadj, V* adj, C n, string filename){
   }
   for (long long i =0; i<n; i++){
     for (long long j = xadj[i]; j < xadj[i+1]; j++){
-      if (adj[j] < i) break;
+      if (adj[j] < i) continue;
       fout << i << " " << adj[j] << '\n';
     }
   }
@@ -330,7 +380,7 @@ vector<string> split(string input, string delimiter){
 }
 const string METIS_NAME = "_METIS";
 const string RCM_NAME = "_RCM";
-vector<string> allowed_algorithms = {"rcm", "metis", "random"};
+vector<string> allowed_algorithms = {"rcm", "metis-naive", "random", "no-order"};
 
 bool reorder_and_print_graph(unsigned int *xadj, unsigned int*adj, long long n, long long m, unsigned int* order, string filename){
   unsigned int* inverse_order = new unsigned int[n];
@@ -368,13 +418,14 @@ int main(int argc, char** argv) {
   if(argc < 4) {
     cout << "Use: exec filename algorithm output_filename [block_number] \n";
     cout << "(if you don't want to print out a reordered graph, pass - as the output_filename)\n ";
-    cout << "Algorithms: random rcm metis\n";
+    cout << "Algorithms: random rcm metis-naive\n";
     return 1;
   }
 
   char binary_name[1024];
   sprintf(binary_name, "%s.met.bin", argv[1]);
   string algorithm = argv[2];
+  cout << "Using algorithm: " << algorithm << endl;
   if (std::find(allowed_algorithms.begin(), allowed_algorithms.end(), algorithm) == allowed_algorithms.end()){
     cout << "Please use one of the allowed algorithms:\n";
     for (auto alg : allowed_algorithms) cout << alg << endl;
@@ -546,7 +597,9 @@ int main(int argc, char** argv) {
     double endt = omp_get_wtime();
     cout << "took " << endt - startt << " secs." << endl;
     confirm_ordering(order, n);
-  }
+  } else if (algorithm == "metis-naive"){
+    bool worked = metis_partitioning(xadj, adj, n, m, b, order);
+  } else if (algorithm == "no-order"){}
   testOrder(xadj, adj, n, b, order);
   bool renumber_correct = reorder_and_print_graph(xadj, adj, n, m, order, argv[3]);
   if (!renumber_correct) {
