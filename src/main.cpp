@@ -26,6 +26,10 @@ bool sortedge(const pair<T,T> &a,
   }
 }
 
+enum MetisNumberingAlg {
+  kNaive,
+  kScoreCombined, // score each vertex by its total straddle edge count, and use score to greedily order vertices 
+};
 void create_64bit_graph(unsigned int* xadj, unsigned int* adj, idx_t*& new_xadj, idx_t*& new_adj, long long n, long long m){
   new_xadj = new idx_t[n+1];
   new_adj = new idx_t[m];
@@ -48,7 +52,7 @@ struct count_name_compare{
 // For each part, the number of cut edges of each vertex is placed in an array
 //  That array is made into a heap and elements are popped
 //    For each vertex, if the number of cut edges to the left are bigger than the right, that vertex is added at the left, else its added at the right
-void bad_metis_renumbering(idx_t* part, unsigned int* order, long long n, int num_parts, unsigned int * xadj, unsigned int * adj){
+void score_metis_renumbering(idx_t* part, unsigned int* order, long long n, int num_parts, unsigned int * xadj, unsigned int * adj){
   // count each part's size
   vector<long long> part_size(num_parts+1, 0);
   for (long long i = 0; i<n; i++) part_size[part[i]+1]++;
@@ -87,6 +91,8 @@ void bad_metis_renumbering(idx_t* part, unsigned int* order, long long n, int nu
       pop_heap(boundary_counter, boundary_counter+names[p].size()-ji, count_name_compare());
     }
   }
+  delete[] boundary_counter;
+  delete[] boundary_counter_sides;
 }
 void naive_metis_renumbering(idx_t* part, unsigned int* order, long long n, int num_parts){
   vector<long long> part_size(num_parts+1, 0);
@@ -108,7 +114,7 @@ void boundary_reduction_metis_renumbering(idx_t* part, unsigned int* order, long
   }
 }
 
-bool metis_partitioning(unsigned int* xadj, unsigned int* adj, long long n, long long m, int num_parts, unsigned int * order){
+bool metis_partitioning(unsigned int* xadj, unsigned int* adj, long long n, long long m, int num_parts, unsigned int * order, MetisNumberingAlg score_alg){
   idx_t* metis_xadj, *metis_adj;
   idx_t *nvtx = new idx_t(n);
   idx_t *ncon = new idx_t(1); // number of balancing constraints
@@ -117,19 +123,33 @@ bool metis_partitioning(unsigned int* xadj, unsigned int* adj, long long n, long
   idx_t *part = new idx_t[*nvtx];
   idx_t options[METIS_NOPTIONS];
   double startt = omp_get_wtime();
-  cout << "Creating 64 bit grap  ... ";
+  cout << "Creating 64 bit grap  ... " << flush;
   create_64bit_graph(xadj, adj, metis_xadj, metis_adj, n, m); 
   cout << "took " << omp_get_wtime()-startt << " secs." << endl;
   startt = omp_get_wtime();
-  cout << "METIS partitioning  ... ";
+  cout << "METIS partitioning  ... " << flush;
   METIS_PartGraphRecursive(nvtx, ncon, metis_xadj, metis_adj, NULL, NULL, NULL, nparts, NULL, NULL, NULL, objval, part);
   cout << "took " << omp_get_wtime()-startt << " secs." << endl;
   startt = omp_get_wtime();
-  cout << "filling order array  ... ";
-  //naive_metis_renumbering(part, order, n, num_parts);
-  bad_metis_renumbering(part, order, n, num_parts, xadj, adj);
+  cout << "filling order array  ... " << flush;
+  bool flag = true;
+  if (score_alg == kNaive) 
+    naive_metis_renumbering(part, order, n, num_parts);
+  else if (score_alg == kScoreCombined){
+    score_metis_renumbering(part, order, n, num_parts, xadj, adj);
+  } else {
+    cout << "Choose a legal renumbering algorithm for METIS\n";
+    flag = false;
+  }
   cout << "took " << omp_get_wtime()-startt << " secs." << endl;
-  return true;
+  delete [] metis_xadj;
+  delete [] metis_adj;
+  delete nvtx;
+  delete ncon; // number of balancing constraints
+  delete nparts;
+  delete objval;
+  delete [] part;
+  return flag;
 }
 
 //[Two improved algorithms for envelope and wavefront reduction]
@@ -441,7 +461,7 @@ vector<string> split(string input, string delimiter){
 }
 const string METIS_NAME = "_METIS";
 const string RCM_NAME = "_RCM";
-vector<string> allowed_algorithms = {"rcm", "metis-naive", "random", "no-order"};
+vector<string> allowed_algorithms = {"rcm", "metis-naive", "metis-score", "random", "no-order"};
 
 bool reorder_and_print_graph(unsigned int *xadj, unsigned int*adj, long long n, long long m, unsigned int* order, string filename){
   unsigned int* inverse_order = new unsigned int[n];
@@ -449,15 +469,18 @@ bool reorder_and_print_graph(unsigned int *xadj, unsigned int*adj, long long n, 
   unsigned int *new_xadj = new unsigned int[n+1];
   unsigned int *new_adj = new unsigned int[m];
   double startt = omp_get_wtime();
-  cout << "Renumbering graph  ... ";
+  cout << "Renumbering graph  ... " << flush;
   reorder_graph(xadj, adj, n, order, new_xadj, new_adj, inverse_order);
   cout << "took " << omp_get_wtime()-startt << " secs." << endl;
   startt = omp_get_wtime();
-  cout << "Checking renumbering correctness  ... ";
+  cout << "Checking renumbering correctness  ... " << flush;
   bool confirmed = confirm_renumbered_graph(xadj, new_xadj, adj, new_adj, order, inverse_order, n);
   cout << "took " << omp_get_wtime()-startt << " secs." << endl;
   if (!confirmed){
     cout << "Graph renaming is wrong\n";
+    delete [] inverse_order;
+    delete [] new_xadj;
+    delete [] new_adj;
     return false;
   }
   if (filename[0]!='-'){
@@ -468,10 +491,13 @@ bool reorder_and_print_graph(unsigned int *xadj, unsigned int*adj, long long n, 
     string name = filename;
     cout << "Printing the renamed graph to " << name << endl;
     startt = omp_get_wtime();
-    cout << "Printing graph  ... ";
+    cout << "Printing graph  ... " << flush;
     print_graph(new_xadj, new_adj, n, name);
     cout << "took " << omp_get_wtime()-startt << " secs." << endl;
   }
+  delete [] inverse_order;
+  delete [] new_xadj;
+  delete [] new_adj;
   return true;
 
 }
@@ -479,7 +505,8 @@ int main(int argc, char** argv) {
   if(argc < 4) {
     cout << "Use: exec filename algorithm output_filename [block_number] \n";
     cout << "(if you don't want to print out a reordered graph, pass - as the output_filename)\n ";
-    cout << "Algorithms: random rcm metis-naive\n";
+    cout << "Algorithms:\n:";
+    for (auto alg : allowed_algorithms) cout << alg << endl;
     return 1;
   }
 
@@ -653,14 +680,22 @@ int main(int argc, char** argv) {
     long long* Qb = new long long[n];  
     long long* distance = new long long[n];
     double startt = omp_get_wtime();
-    cout << "Generating RCM ordering ... ";
+    cout << "Generating RCM ordering ... " << flush;
     rcm_sequential(xadj, adj, n, order, distance, Qb);
+    delete [] Qb;
+    delete [] distance;
     double endt = omp_get_wtime();
     cout << "took " << endt - startt << " secs." << endl;
     confirm_ordering(order, n);
   } else if (algorithm == "metis-naive"){
-    bool worked = metis_partitioning(xadj, adj, n, m, b, order);
-    if (!confirm_ordering(order, n)){
+    bool worked = metis_partitioning(xadj, adj, n, m, b, order, kNaive);
+    if (!worked || !confirm_ordering(order, n)){
+      cout << "Failed\n";
+      return 1;
+    }
+  } else if (algorithm == "metis-score"){
+    bool worked = metis_partitioning(xadj, adj, n, m, b, order, kScoreCombined);
+    if (!worked || !confirm_ordering(order, n)){
       cout << "Failed\n";
       return 1;
     }
