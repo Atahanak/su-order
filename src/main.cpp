@@ -26,10 +26,13 @@ bool sortedge(const pair<T,T> &a,
   }
 }
 
+const string GRAPPOLO_BINARY_CONVERTER="grappolo/convertFileToBinary";
+const string GRAPPOLO_CLUSTERING="grappolo/driverForGraphClustering";
 enum MetisNumberingAlg {
   kNaive,
   kScoreCombined, // score each vertex by its total straddle edge count, and use score to greedily order vertices 
 };
+
 void create_64bit_graph(unsigned int* xadj, unsigned int* adj, idx_t*& new_xadj, idx_t*& new_adj, long long n, long long m){
   new_xadj = new idx_t[n+1];
   new_adj = new idx_t[m];
@@ -52,7 +55,8 @@ struct count_name_compare{
 // For each part, the number of cut edges of each vertex is placed in an array
 //  That array is made into a heap and elements are popped
 //    For each vertex, if the number of cut edges to the left are bigger than the right, that vertex is added at the left, else its added at the right
-void score_metis_renumbering(idx_t* part, unsigned int* order, long long n, int num_parts, unsigned int * xadj, unsigned int * adj){
+template <typename T>
+void score_metis_renumbering(T* part, unsigned int* order, long long n, int num_parts, unsigned int * xadj, unsigned int * adj){
   // count each part's size
   vector<long long> part_size(num_parts+1, 0);
   for (long long i = 0; i<n; i++) part_size[part[i]+1]++;
@@ -94,18 +98,8 @@ void score_metis_renumbering(idx_t* part, unsigned int* order, long long n, int 
   delete[] boundary_counter;
   delete[] boundary_counter_sides;
 }
-void naive_metis_renumbering(idx_t* part, unsigned int* order, long long n, int num_parts){
-  vector<long long> part_size(num_parts+1, 0);
-  for (long long i = 0; i<n; i++) part_size[part[i]+1]++;
-  for (int i =0; i < num_parts;i++) part_size[i+1]+=part_size[i];
-  for (long long i =0; i<n; i++){
-    order[i] = part_size[part[i]]++;
-  }
-}
-
-void boundary_reduction_metis_renumbering(idx_t* part, unsigned int* order, long long n, int num_parts){
-  // for each part pair, rank vertices by their boundary edges
-  // Number vertices
+template <typename T>
+void naive_metis_renumbering(T* part, unsigned int* order, long long n, int num_parts){
   vector<long long> part_size(num_parts+1, 0);
   for (long long i = 0; i<n; i++) part_size[part[i]+1]++;
   for (int i =0; i < num_parts;i++) part_size[i+1]+=part_size[i];
@@ -151,6 +145,74 @@ bool metis_partitioning(unsigned int* xadj, unsigned int* adj, long long n, long
   delete [] part;
   return flag;
 }
+
+bool grappolo_reordering(string filename, unsigned int*xadj, unsigned int* adj, long long n, unsigned int* order){
+  
+  // create the binary graph if it doesn't exist
+  string binary_file_name = filename+".bin";
+  ifstream bin_checker(binary_file_name);
+  if (!bin_checker.good()){
+    string command = GRAPPOLO_BINARY_CONVERTER +" -f 6 -o " +filename;
+    char buffer[128];
+    FILE* pipe = popen(command.c_str(), "r");
+    if (!pipe) cout << "popen failed\n";
+    while (!feof(pipe)) {
+      // use buffer to read and add to result
+      if (fgets(buffer, 128, pipe) != NULL){
+        cout << buffer;
+      }
+    }
+    pclose(pipe);
+  }
+  // set the parameters required
+  string command = GRAPPOLO_CLUSTERING+" -f 9 -o " + binary_file_name;
+  // run the script
+  long long num_clusters = -1;
+  char buffer[128];
+  FILE* pipe = popen(command.c_str(), "r");
+  if (!pipe) cout << "popen failed\n";
+  while (!feof(pipe)) {
+    // use buffer to read and add to result
+    if (fgets(buffer, 128, pipe) != NULL){
+      cout << buffer << endl;
+    }
+    string l(buffer);
+    if (l.find("Final number of clusters") != -1){
+      stringstream ss(l);
+      ss >> l >> l >> l >> l >> l >> num_clusters;
+    }
+  }
+  if (num_clusters == -1){
+    cout << "Couldn't find number of clusters\n";
+    return false;
+  }
+  pclose(pipe);
+  string cluster_info_file = binary_file_name+"_clustInfo";
+  // read the clusterinfo file
+  ifstream info(cluster_info_file);
+  if (!info.good()){
+    cout << "Failed to grappolo order\n";
+    return false;
+  }
+  unsigned int* part = new unsigned int[n];
+  char line[256];
+  for (int i =0; i< n; i++){
+    if (!info.getline(line, 256)){
+      cout << "Not enough lines in cluster info file\n"; 
+      delete [] part;
+      return false;
+    }
+    stringstream is(line);
+    is >> part[i];
+  }
+  
+  // use one of the numbering functions to get numbers
+  naive_metis_renumbering(part, order, n, num_clusters);
+
+  return true;
+} 
+
+
 
 //[Two improved algorithms for envelope and wavefront reduction]
 //[ORDERING SYMMETRIC SPARSE MATRICES FOR SMALL PROFILE AND WAVEFRONT]
@@ -461,7 +523,7 @@ vector<string> split(string input, string delimiter){
 }
 const string METIS_NAME = "_METIS";
 const string RCM_NAME = "_RCM";
-vector<string> allowed_algorithms = {"rcm", "metis-naive", "metis-score", "random", "no-order"};
+vector<string> allowed_algorithms = {"rcm", "metis-naive", "metis-score", "random", "no-order", "grappolo"};
 
 bool reorder_and_print_graph(unsigned int *xadj, unsigned int*adj, long long n, long long m, unsigned int* order, string filename){
   unsigned int* inverse_order = new unsigned int[n];
@@ -689,6 +751,7 @@ int main(int argc, char** argv) {
     confirm_ordering(order, n);
   } else if (algorithm == "metis-naive"){
     bool worked = metis_partitioning(xadj, adj, n, m, b, order, kNaive);
+
     if (!worked || !confirm_ordering(order, n)){
       cout << "Failed\n";
       return 1;
@@ -699,6 +762,8 @@ int main(int argc, char** argv) {
       cout << "Failed\n";
       return 1;
     }
+  } else if (algorithm == "grappolo"){
+    grappolo_reordering(argv[1], xadj, adj, n, order);
   } else if (algorithm == "no-order"){}
   testOrder(xadj, adj, n, b, order);
   bool renumber_correct = reorder_and_print_graph(xadj, adj, n, m, order, argv[3]);
