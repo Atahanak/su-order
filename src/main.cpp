@@ -11,6 +11,14 @@
 #include <queue>
 #include <set>
 #include <metis.h>
+#ifdef __cplusplus
+extern "C" {
+#endif
+#include <amd.h>
+#ifdef __cplusplus
+}
+#endif
+
 
 #include "utils/stats.cpp"
 
@@ -33,9 +41,10 @@ enum MetisNumberingAlg {
   kScoreCombined, // score each vertex by its total straddle edge count, and use score to greedily order vertices 
 };
 
-void create_64bit_graph(unsigned int* xadj, unsigned int* adj, idx_t*& new_xadj, idx_t*& new_adj, long long n, long long m){
-  new_xadj = new idx_t[n+1];
-  new_adj = new idx_t[m];
+template <typename type>
+void create_64bit_graph(unsigned int* xadj, unsigned int* adj, type*& new_xadj, type*& new_adj, long long n, long long m){
+  new_xadj = new type[n+1];
+  new_adj = new type[m];
   for (long long i = 0;i <n+1; i++) new_xadj[i] = xadj[i];
   for (long long i = 0;i <m; i++) new_adj[i] = adj[i];
 }
@@ -460,6 +469,21 @@ void reorder_graph(E* xadj, V* adj, L n, O* order, E*new_xadj, V* new_adj, O* in
   }
 }
 
+bool amd_sequential(unsigned int *xadj, unsigned int* adj, long long n, unsigned int* order) {
+  long *xadj_long, *adj_long;
+  create_64bit_graph(xadj, adj, xadj_long, adj_long, n, xadj[n]);
+  long * i_order = new long[n];
+  double *Control = new double[AMD_CONTROL];
+  double *Info = new double[AMD_INFO];
+  int status = amd_l_order(n, xadj_long, adj_long, i_order, Control, Info);
+  if (status != 0){
+    cout << "AMD failed\n";
+    return false;
+  }
+  for (int i =0; i< n; i++) order[i_order[i]]=i;
+  return true;
+}
+
 void rcm_sequential(unsigned int *xadj, unsigned int* adj, long long n, unsigned int* Q, long long* Qp, long long* distance) {
   long long* V = new long long[n]; for(long long i = 0; i < n; i++) V[i] = 0;
   priority_queue<pair<long long, long long> > PQ;
@@ -523,7 +547,7 @@ vector<string> split(string input, string delimiter){
 }
 const string METIS_NAME = "_METIS";
 const string RCM_NAME = "_RCM";
-vector<string> allowed_algorithms = {"rcm", "metis-naive", "metis-score", "random", "no-order", "grappolo"};
+vector<string> allowed_algorithms = {"rcm", "metis-naive", "metis-score", "random", "no-order", "grappolo", "amd"};
 
 bool reorder_and_print_graph(unsigned int *xadj, unsigned int*adj, long long n, long long m, unsigned int* order, string filename){
   unsigned int* inverse_order = new unsigned int[n];
@@ -764,6 +788,12 @@ int main(int argc, char** argv) {
     }
   } else if (algorithm == "grappolo"){
     grappolo_reordering(argv[1], xadj, adj, n, order);
+  } else if (algorithm == "amd"){
+    bool worked = amd_sequential(xadj, adj, n, order);
+    if (!worked || !confirm_ordering(order, n)){
+      cout << "Failed\n";
+      return 1;
+    }
   } else if (algorithm == "no-order"){}
   testOrder(xadj, adj, n, b, order);
   bool renumber_correct = reorder_and_print_graph(xadj, adj, n, m, order, argv[3]);

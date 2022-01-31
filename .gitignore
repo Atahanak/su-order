@@ -34,3 +34,7 @@
 # Vim
 *.swp
 *.swo
+
+lib/
+metis-5.1.0/build/
+AMD/Lib/
