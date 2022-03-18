@@ -14,7 +14,7 @@ AMD_INCLUDE=AMD/Include/
 AMD_LIB=AMD/Lib/
 
 GCC=g++
-GCC_FLAGS= -std=c++14 -fopenmp -O3 -I${METIS_INCLUDE} -I${AMD_INCLUDE} -L${METIS_LIB} -L${AMD_LIB}  -lamd -lmetis -lmtmetis
+GCC_FLAGS= -std=c++14 -fopenmp -O3 -I${METIS_INCLUDE} -I${AMD_INCLUDE} -L${METIS_LIB} -L${AMD_LIB}  -lamd -lmetis #-lmtmetis
 GCC_DEBUG_FLAGS= -std=c++14 -fopenmp -g 
 
 all : $(TARGET)
