@@ -10,7 +10,11 @@
 #include <iomanip>
 #include <queue>
 #include <set>
+#ifdef PAR_METIS
+#include <mtmetis.h>
+#else
 #include <metis.h>
+#endif
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -117,6 +121,54 @@ void naive_metis_renumbering(T* part, unsigned int* order, long long n, int num_
   }
 }
 
+#ifdef PAR_METIS
+bool par_metis_partitioning(unsigned int* xadj, unsigned int* adj, long long n, long long m, int num_parts, unsigned int * order, MetisNumberingAlg score_alg){
+  double * options = mtmetis_init_options();
+  for (int i =0; i< MTMETIS_NOPTIONS; i++) if (options[i]!=MTMETIS_VAL_OFF){
+    cout << "Bad option init\n";
+  }
+  options[MTMETIS_OPTION_NTHREADS] = 4;
+  options[MTMETIS_OPTION_VERBOSITY] = MTMETIS_VERBOSITY_MAXIMUM;
+  mtmetis_adj_type * metis_xadj;
+  mtmetis_vtx_type * metis_adj;
+  mtmetis_vtx_type *nvtx = new mtmetis_vtx_type (n);
+  mtmetis_vtx_type  *ncon = new mtmetis_vtx_type  (1); // number of balancing constraints
+  mtmetis_pid_type  *nparts = new mtmetis_pid_type (num_parts);
+  mtmetis_real_type * ubvec = new mtmetis_real_type(1);
+  mtmetis_wgt_type  *objval = new mtmetis_wgt_type;
+  mtmetis_pid_type  *part = new mtmetis_pid_type[*nvtx];
+  cout << "n " << *nvtx <<endl;
+  cout << "t " << omp_get_num_threads() <<endl;
+  double startt = omp_get_wtime();
+  cout << "Creating 64 bit grap  ... " << flush;
+  create_64bit_graph(xadj, adj, metis_xadj, metis_adj, n, m); 
+  cout << "took " << omp_get_wtime()-startt << " secs." << endl;
+  startt = omp_get_wtime();
+  cout << "METIS partitioning  ... " << flush;
+  MTMETIS_PartGraphRecursive(nvtx, ncon, metis_xadj, metis_adj, NULL, NULL, NULL, nparts, NULL, ubvec, options, objval, part);
+  cout << "took " << omp_get_wtime()-startt << " secs." << endl;
+  startt = omp_get_wtime();
+  cout << "filling order array  ... " << flush;
+  bool flag = true;
+  if (score_alg == kNaive) 
+    naive_metis_renumbering(part, order, n, num_parts);
+  else if (score_alg == kScoreCombined){
+    score_metis_renumbering(part, order, n, num_parts, xadj, adj);
+  } else {
+    cout << "Choose a legal renumbering algorithm for METIS\n";
+    flag = false;
+  }
+  cout << "took " << omp_get_wtime()-startt << " secs." << endl;
+  delete [] metis_xadj;
+  delete [] metis_adj;
+  delete nvtx;
+  delete ncon; // number of balancing constraints
+  delete nparts;
+  delete objval;
+  delete [] part;
+  return flag;
+}
+#else
 bool metis_partitioning(unsigned int* xadj, unsigned int* adj, long long n, long long m, int num_parts, unsigned int * order, MetisNumberingAlg score_alg){
   idx_t* metis_xadj, *metis_adj;
   idx_t *nvtx = new idx_t(n);
@@ -154,6 +206,7 @@ bool metis_partitioning(unsigned int* xadj, unsigned int* adj, long long n, long
   delete [] part;
   return flag;
 }
+#endif
 
 bool grappolo_reordering(string filename, unsigned int*xadj, unsigned int* adj, long long n, unsigned int* order){
   
@@ -178,6 +231,8 @@ bool grappolo_reordering(string filename, unsigned int*xadj, unsigned int* adj, 
   // run the script
   long long num_clusters = -1;
   char buffer[128];
+  double start = omp_get_wtime();
+  cout << "Grappolo reordering ...";
   FILE* pipe = popen(command.c_str(), "r");
   if (!pipe) cout << "popen failed\n";
   while (!feof(pipe)) {
@@ -193,15 +248,17 @@ bool grappolo_reordering(string filename, unsigned int*xadj, unsigned int* adj, 
   }
   if (num_clusters == -1){
     cout << "Couldn't find number of clusters\n";
-    return false;
+    throw 1;
   }
   pclose(pipe);
+  double end = omp_get_wtime();
+  cout << " done in " << end - start << endl;
   string cluster_info_file = binary_file_name+"_clustInfo";
   // read the clusterinfo file
   ifstream info(cluster_info_file);
   if (!info.good()){
     cout << "Failed to grappolo order\n";
-    return false;
+    throw 1;
   }
   unsigned int* part = new unsigned int[n];
   char line[256];
@@ -475,7 +532,11 @@ bool amd_sequential(unsigned int *xadj, unsigned int* adj, long long n, unsigned
   long * i_order = new long[n];
   double *Control = new double[AMD_CONTROL];
   double *Info = new double[AMD_INFO];
+  double start = omp_get_wtime();
+  cout << "Starting amd ordering ...";
   int status = amd_l_order(n, xadj_long, adj_long, i_order, Control, Info);
+  double end = omp_get_wtime();
+  cout << " done in " << end - start << endl;
   if (status != 0){
     cout << "AMD failed\n";
     return false;
@@ -547,7 +608,7 @@ vector<string> split(string input, string delimiter){
 }
 const string METIS_NAME = "_METIS";
 const string RCM_NAME = "_RCM";
-vector<string> allowed_algorithms = {"rcm", "metis-naive", "metis-score", "random", "no-order", "grappolo", "amd"};
+vector<string> allowed_algorithms = {"rcm", "metis-naive", "metis-score", "random", "no-order", "grappolo", "amd", "mtmetis-naive", "mtmetis-score", "metis-naive-base2"};
 
 bool reorder_and_print_graph(unsigned int *xadj, unsigned int*adj, long long n, long long m, unsigned int* order, string filename){
   unsigned int* inverse_order = new unsigned int[n];
@@ -773,19 +834,66 @@ int main(int argc, char** argv) {
     double endt = omp_get_wtime();
     cout << "took " << endt - startt << " secs." << endl;
     confirm_ordering(order, n);
-  } else if (algorithm == "metis-naive"){
+  } else if (algorithm == "mtmetis-naive"){
+    #ifdef PAR_METIS
+    bool worked = par_metis_partitioning(xadj, adj, n, m, b, order, kNaive);
+
+    if (!worked || !confirm_ordering(order, n)){
+      cout << "Failed\n";
+      return 1;
+    }
+    #else
+    cout << "Please compile with preprocessor option PAR_METIS\n";
+    return 1;
+    #endif
+  } else if (algorithm == "mtmetis-score"){
+    #ifdef PAR_METIS
+    bool worked = par_metis_partitioning(xadj, adj, n, m, b, order, kScoreCombined);
+    if (!worked || !confirm_ordering(order, n)){
+      cout << "Failed\n";
+      return 1;
+    }
+    #else
+    cout << "Please compile with preprocessor option PAR_METIS\n";
+    return 1;
+    #endif
+  } else if (algorithm == "metis-naive-base2"){
+    #ifndef PAR_METIS
+    b = (int)pow<float>(2,ceil(log2(b)));
+    cout << "Using b = " << b << endl;
     bool worked = metis_partitioning(xadj, adj, n, m, b, order, kNaive);
 
     if (!worked || !confirm_ordering(order, n)){
       cout << "Failed\n";
       return 1;
     }
+    #else
+    cout << "Please compile without preprocessor option PAR_METIS\n";
+    return 1;
+    #endif
+  } else if (algorithm == "metis-naive"){
+    #ifndef PAR_METIS
+    bool worked = metis_partitioning(xadj, adj, n, m, b, order, kNaive);
+
+    if (!worked || !confirm_ordering(order, n)){
+      cout << "Failed\n";
+      return 1;
+    }
+    #else
+    cout << "Please compile without preprocessor option PAR_METIS\n";
+    return 1;
+    #endif
   } else if (algorithm == "metis-score"){
+    #ifndef PAR_METIS
     bool worked = metis_partitioning(xadj, adj, n, m, b, order, kScoreCombined);
     if (!worked || !confirm_ordering(order, n)){
       cout << "Failed\n";
       return 1;
     }
+    #else
+    cout << "Please compile without preprocessor option PAR_METIS\n";
+    return 1;
+    #endif
   } else if (algorithm == "grappolo"){
     grappolo_reordering(argv[1], xadj, adj, n, order);
   } else if (algorithm == "amd"){
